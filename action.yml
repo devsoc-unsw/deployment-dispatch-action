@@ -1,0 +1,154 @@
+name: Deployment Dispatch Action
+description: Authenticate with the image updater GitHub App and dispatch deployment image updates.
+inputs:
+  deployment-dispatcher-app-id:
+    description: Deployment dispatcher GitHub App ID used to create the dispatch token.
+    required: true
+  deployment-dispatcher-app-private-key:
+    description: Deployment dispatcher GitHub App private key used to create the dispatch token.
+    required: true
+  updates:
+    description: Image update definitions as newline-delimited image=tag pairs.
+    required: true
+  owner:
+    description: Owner of the deployment repository.
+    required: false
+    default: devsoc-unsw
+  repository:
+    description: Repository that receives the workflow dispatch.
+    required: false
+    default: deployment
+  workflow:
+    description: Workflow file name to dispatch.
+    required: false
+    default: dispatch-image-update.yml
+  watch-timeout-seconds:
+    description: Maximum time in seconds to wait for the dispatched workflow run to finish.
+    required: false
+    default: "180"
+outputs:
+  run-id:
+    description: ID of the dispatched workflow run.
+    value: ${{ steps.poll.outputs.run-id }}
+  run-url:
+    description: HTML URL of the dispatched workflow run.
+    value: ${{ steps.poll.outputs.run-url }}
+  run-conclusion:
+    description: Conclusion of the dispatched workflow run.
+    value: ${{ steps.poll.outputs.run-conclusion }}
+runs:
+  using: composite
+  steps:
+    - name: Create GitHub App token
+      id: app-token
+      uses: actions/create-github-app-token@f8d387b68d61c58ab83c6c016672934102569859 # v3.0.0
+      with:
+        app-id: ${{ inputs.deployment-dispatcher-app-id }}
+        private-key: ${{ inputs.deployment-dispatcher-app-private-key }}
+        owner: ${{ inputs.owner }}
+        repositories: ${{ inputs.repository }}
+        permission-actions: write
+        permission-checks: read
+    - name: Prepare dispatch payload
+      id: prepare
+      shell: bash
+      env:
+        INPUT_UPDATES: ${{ inputs.updates }}
+      run: |
+        updates_json="$(
+          jq --raw-input --slurp --compact-output '
+            split("\n")
+            | to_entries
+            | map(select(.value | test("^\\s*$") | not))
+            | if length == 0 then
+                error("updates must not be empty")
+              else
+                map(
+                  . as $line
+                  | try (
+                      $line.value
+                      | capture("^\\s*(?<image>.+?)\\s*=\\s*(?<tag>.+?)\\s*$")
+                    ) catch error("invalid update line \($line.key + 1): \($line.value)")
+                )
+              end
+          ' <<< "${INPUT_UPDATES}"
+        )"
+
+        echo "updates-json=${updates_json}" >> "${GITHUB_OUTPUT}"
+    - name: Send workflow dispatch
+      id: dispatch
+      shell: bash
+      env:
+        GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        GH_REPO: ${{ inputs.owner }}/${{ inputs.repository }}
+        INPUT_WORKFLOW: ${{ inputs.workflow }}
+        UPDATES_JSON: ${{ steps.prepare.outputs.updates-json }}
+      run: |
+        response="$(
+          jq --compact-output --null-input \
+            --arg updates "${UPDATES_JSON}" \
+            '{updates: $updates}' \
+            | gh workflow run "${INPUT_WORKFLOW}" --json
+        )"
+
+        run_url="$(
+          grep --extended-regexp --only-matching 'https://github\.com/[^[:space:]]+/actions/runs/[0-9]+' <<< "${response}" \
+            | tail --lines 1 \
+            || true
+        )"
+
+        if [[ -z "${run_url}" ]]; then
+          echo "gh workflow run did not return a workflow run URL" >&2
+          exit 1
+        fi
+
+        {
+          echo "run-id=${run_url##*/}"
+          echo "run-url=${run_url}"
+        } >> "${GITHUB_OUTPUT}"
+    - name: Poll dispatched workflow run
+      id: poll
+      shell: bash
+      env:
+        GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        GH_REPO: ${{ inputs.owner }}/${{ inputs.repository }}
+        DISPATCHED_RUN_ID: ${{ steps.dispatch.outputs.run-id }}
+        DISPATCHED_RUN_URL: ${{ steps.dispatch.outputs.run-url }}
+        INPUT_WATCH_TIMEOUT_SECONDS: ${{ inputs.watch-timeout-seconds }}
+      run: |
+        if ! [[ "${INPUT_WATCH_TIMEOUT_SECONDS}" =~ ^[1-9][0-9]*$ ]]; then
+          echo "watch-timeout-seconds must be a positive integer" >&2
+          exit 1
+        fi
+
+        echo "Watching dispatched workflow run: ${DISPATCHED_RUN_URL}"
+
+        # gh run watch waits for the run to complete, exits non-zero if it fails.
+        # We capture the exit code but don't fail yet because we still need to emit outputs.
+        watch_exit=0
+        timeout "${INPUT_WATCH_TIMEOUT_SECONDS}s" gh run watch "${DISPATCHED_RUN_ID}" --exit-status || watch_exit=$?
+
+        # Fetch final run details as JSON for outputs.
+        run_json="$(
+          gh run view "${DISPATCHED_RUN_ID}" --json databaseId,url,conclusion
+        )"
+
+        run_id="$(jq --raw-output '.databaseId' <<< "${run_json}")"
+        run_url="$(jq --raw-output '.url // env.DISPATCHED_RUN_URL // ""' <<< "${run_json}")"
+        run_conclusion="$(jq --raw-output '.conclusion // ""' <<< "${run_json}")"
+
+        {
+          echo "run-id=${run_id}"
+          echo "run-url=${run_url}"
+          echo "run-conclusion=${run_conclusion}"
+        } >> "${GITHUB_OUTPUT}"
+
+        if [[ "${watch_exit}" -eq 124 ]]; then
+          echo "Dispatched workflow did not finish within ${INPUT_WATCH_TIMEOUT_SECONDS}s: ${run_url}" >&2
+          exit 1
+        fi
+
+        if [[ "${watch_exit}" -ne 0 ]]; then
+          echo "Dispatched workflow failed: ${run_url}" >&2
+          exit 1
+        fi

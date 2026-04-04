@@ -1,0 +1,30 @@
+name: Actionlint Smoke
+on:
+  # This workflow exists so actionlint can analyze the local composite action via `uses: ./`.
+  # It is intentionally triggered by an unlikely repository_dispatch type instead of normal CI events.
+  repository_dispatch:
+    types:
+      - actionlint-smoke
+permissions: {}
+jobs:
+  validate-local-action:
+    # Keep a concrete local-action invocation in the repo so workflow linters can validate action.yml.
+    name: Validate Local Action
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    concurrency:
+      group: actionlint-smoke-${{ github.workflow }}-${{ github.ref }}
+      cancel-in-progress: true
+    permissions: {}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Use local action
+        # Dummy values are sufficient because this workflow is not expected to run in normal operation.
+        uses: ./
+        with:
+          deployment-dispatcher-app-id: "1"
+          deployment-dispatcher-app-private-key: "dummy"
+          updates: ghcr.io/devsoc-unsw/example=deadbeef

@@ -1,0 +1,33 @@
+[tools]
+actionlint = "latest"
+shellcheck = "latest"
+ghalint = "latest"
+pinact = "latest"
+zizmor = "latest"
+yamlfmt = "latest"
+
+[tasks.check]
+depends = ["check:*"]
+description = "Run all repository checks."
+
+[tasks."check:actionlint"]
+run = "actionlint -color"
+env.SHELLCHECK_OPTS = "--enable=all --exclude=SC2312"
+description = "Lint all GitHub Actions workflows, including the local-action smoke workflow."
+
+[tasks."check:ghalint"]
+run = ["ghalint run", "ghalint run-action"]
+description = "Run ghalint against workflows and action metadata files."
+
+[tasks."check:pinact"]
+run = "pinact run --verify {% if env.LINT is defined %}--check{% endif %}"
+description = "Verify pinned GitHub Actions dependencies in action metadata and workflows."
+
+[tasks."check:yamlfmt"]
+run = "yamlfmt {% if env.LINT is defined %}-lint{% endif %} action.yml .github/workflows/*.yml"
+description = "Format or check action metadata and workflow YAML files."
+
+[tasks."check:zizmor"]
+run = "zizmor --pedantic ."
+env.GH_TOKEN = "{{ env.GITHUB_TOKEN }}"
+description = "Run zizmor against action metadata and workflows."
