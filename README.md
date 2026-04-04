@@ -14,6 +14,8 @@ The GitHub App must be installed on the target org and repository with these rep
 - `Actions: write`
 - `Checks: read`
 
+This action passes an explicit workflow `ref` by default so `gh workflow run` does not need to resolve the target repo's default branch, which typically requires `Contents: read`.
+
 ## Runner support
 
 This action is only supported on GitHub-hosted `ubuntu-22.04` and `ubuntu-24.04` runners.
@@ -32,6 +34,7 @@ The action shell steps depend on the Ubuntu runner toolchain contract, including
 | `owner` | no | `devsoc-unsw` | Owner of the deployment repository |
 | `repository` | no | `deployment` | Deployment repository name |
 | `workflow` | no | `dispatch-image-update.yml` | Workflow file to dispatch |
+| `ref` | no | `dev` | Git ref used when dispatching the workflow |
 | `watch-timeout-seconds` | no | `180` | Maximum time to wait for the dispatched workflow run to finish |
 
 ### Update format
@@ -87,6 +90,7 @@ See [`action.yml`](action.yml) for outputs — they are usually not required by 
     owner: devsoc-unsw
     repository: deployment
     workflow: dispatch-image-update.yml
+    ref: dev
     updates: |
       ghcr.io/devsoc-unsw/notangles=${{ github.sha }}
 ```

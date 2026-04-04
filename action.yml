@@ -22,6 +22,10 @@ inputs:
     description: Workflow file name to dispatch.
     required: false
     default: dispatch-image-update.yml
+  ref:
+    description: Git ref in the target repository used for the workflow dispatch.
+    required: false
+    default: dev
   watch-timeout-seconds:
     description: Maximum time in seconds to wait for the dispatched workflow run to finish.
     required: false
@@ -82,13 +86,14 @@ runs:
         GH_TOKEN: ${{ steps.app-token.outputs.token }}
         GH_REPO: ${{ inputs.owner }}/${{ inputs.repository }}
         INPUT_WORKFLOW: ${{ inputs.workflow }}
+        INPUT_REF: ${{ inputs.ref }}
         UPDATES_JSON: ${{ steps.prepare.outputs.updates-json }}
       run: |
         response="$(
           jq --compact-output --null-input \
             --arg updates "${UPDATES_JSON}" \
             '{updates: $updates}' \
-            | gh workflow run "${INPUT_WORKFLOW}" --json
+            | gh workflow run "${INPUT_WORKFLOW}" --ref "${INPUT_REF}" --json
         )"
 
         run_url="$(
